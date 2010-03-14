@@ -47,6 +47,7 @@ static struct OpenState
   size_t read;
 } open_state;
 
+#define CACHE_FILENAME "/var/lib/dpkg/info/tdpkg.cache"
 static int cache_initialized;
 
 /* called once library is preloaded */
@@ -58,6 +59,18 @@ void _init (void)
   else
     return;
 
+  /* use absolute path for current library */
+  char *ld_preload = getenv ("LD_PRELOAD");
+  if (ld_preload)
+    {
+      char *abspath = realpath (ld_preload, NULL);
+      if (abspath)
+        {
+          setenv ("LD_PRELOAD", abspath, 1);
+          free (abspath);
+        }
+    }
+
   memset (&open_state, '\0', sizeof (open_state));
   open_state.fd = -1;
 
@@ -68,11 +81,10 @@ void _init (void)
   realclose = dlsym (RTLD_NEXT, "close");
   realrename = dlsym (RTLD_NEXT, "rename");
 
-  const char* cache_filename = "cache.db";
-  if (!tdpkg_cache_initialize (cache_filename))
+  if (!tdpkg_cache_initialize (CACHE_FILENAME))
     cache_initialized = 1;
   else
-    fprintf (stderr, "tdpkg: cache at %s initialization failed, no wrapping\n", cache_filename);
+    fprintf (stderr, "tdpkg: cache at %s initialization failed, no wrapping\n", CACHE_FILENAME);
 }
 
 static int
