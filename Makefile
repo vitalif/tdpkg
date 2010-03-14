@@ -1,7 +1,9 @@
-CACHE = sqlite
+CACHE = tokyo
 CC = gcc
 CFLAGS = -g -Wall -fPIC
-LIBS = -lc -ldl -lsqlite3
+LIBS = -lc -ldl
+SQLITELIBS = -lsqlite3
+TOKYOLIBS = -ltokyocabinet
 LDFLAGS = -nostdlib -shared
 COMPILE = $(CC) $(CFLAGS)
 LINK = $(CC) $(LDFLAGS) $(LIBS)
@@ -11,7 +13,11 @@ OBJS = $(subst .c,.o,$(SRCS))
 all: libtdpkg.so
 
 libtdpkg.so: $(OBJS)
-	$(LINK) -o libtdpkg.so $+
+ifeq ($(CACHE),sqlite)
+	$(LINK) $(SQLITELIBS) -o libtdpkg.so $+
+else
+	$(LINK) $(TOKYOLIBS) -o libtdpkg.so $+
+endif
 
 %.o: %.c
 	$(COMPILE) -c $<

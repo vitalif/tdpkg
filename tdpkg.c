@@ -47,7 +47,6 @@ static struct OpenState
   size_t read;
 } open_state;
 
-#define CACHE_FILENAME "/var/lib/dpkg/info/tdpkg.cache"
 static int cache_initialized;
 
 /* called once library is preloaded */
@@ -81,10 +80,10 @@ void _init (void)
   realclose = dlsym (RTLD_NEXT, "close");
   realrename = dlsym (RTLD_NEXT, "rename");
 
-  if (!tdpkg_cache_initialize (CACHE_FILENAME))
+  if (!tdpkg_cache_initialize ())
     cache_initialized = 1;
   else
-    fprintf (stderr, "tdpkg: cache at %s initialization failed, no wrapping\n", CACHE_FILENAME);
+    fprintf (stderr, "tdpkg: cache initialization failed, no wrapping\n");
 }
 
 static int
