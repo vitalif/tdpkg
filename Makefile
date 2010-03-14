@@ -1,10 +1,11 @@
+CACHE = sqlite
 CC = gcc
 CFLAGS = -g -Wall -fPIC
 LIBS = -lc -ldl -lsqlite3
 LDFLAGS = -nostdlib -shared
 COMPILE = $(CC) $(CFLAGS)
 LINK = $(CC) $(LDFLAGS) $(LIBS)
-SRCS = tdpkg.c cache.c
+SRCS = tdpkg.c cache-$(CACHE).c
 OBJS = $(subst .c,.o,$(SRCS))
 
 all: libtdpkg.so

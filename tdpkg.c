@@ -24,6 +24,8 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <stdarg.h>
 
 #include "cache.h"
 
@@ -33,18 +35,10 @@ static int (*real__fxstat)(int ver, int fd, struct stat* buf);
 static int (*real__fxstat64)(int ver, int fd, struct stat64* buf);
 static ssize_t (*realread)(int fildes, void *buf, size_t nbyte);
 static int (*realclose)(int fd);
-static FILE* (*realfopen)(const char *path, const char *mode);
-static FILE* (*realfdopen)(int fd, const char *mode);
-static int (*realfclose)(FILE* fp);
+static int (*realrename)(const char *old, const char *new);
 
-/* state */
-static struct FopenState
-{
-  FILE* file;
-  int putc_called;
-} fopen_state;
-
-#define FAKE_FD 1234
+/* handle open() of dpkg/src/filesdb.c */
+#define FAKE_FD 4321
 static struct OpenState
 {
   int fd;
@@ -53,7 +47,6 @@ static struct OpenState
   size_t read;
 } open_state;
 
-static FILE* ignore_file;
 static int cache_initialized;
 
 /* called once library is preloaded */
@@ -65,7 +58,6 @@ void _init (void)
   else
     return;
 
-  memset (&fopen_state, '\0', sizeof (fopen_state));
   memset (&open_state, '\0', sizeof (open_state));
   open_state.fd = -1;
 
@@ -74,12 +66,10 @@ void _init (void)
   real__fxstat64 = dlsym (RTLD_NEXT, "__fxstat64");
   realread = dlsym (RTLD_NEXT, "read");
   realclose = dlsym (RTLD_NEXT, "close");
-  realfopen = dlsym (RTLD_NEXT, "fopen");
-  realfdopen = dlsym (RTLD_NEXT, "fdopen");
-  realfclose = dlsym (RTLD_NEXT, "fclose");
+  realrename = dlsym (RTLD_NEXT, "rename");
 
   const char* cache_filename = "cache.db";
-  if (!tdpkg_cache_init (cache_filename))
+  if (!tdpkg_cache_initialize (cache_filename))
     cache_initialized = 1;
   else
     fprintf (stderr, "tdpkg: cache at %s initialization failed, no wrapping\n", cache_filename);
@@ -91,74 +81,38 @@ is_list_file (const char* path)
   return strstr (path, "/var/lib/dpkg/info/") && strstr (path, ".list");
 }
 
-FILE*
-fopen (const char *path, const char *mode)
-{
-  if (!cache_initialized)
-    return realfopen (path, mode);
-
-  if (!is_list_file (path))
-    return realfopen (path, mode);
-
-  if (fopen_state.file)
-    {
-      fprintf (stderr, "tdpkg: multiple fopen(%s, %s) without fclose() detected, no wrapping\n", path, mode);
-      return realfopen (path, mode);
-    }
-
-  printf ("tpkdg: fopen(%s, %s)\n", path, mode);
-  fopen_state.file = realfopen (path, mode);
-  return fopen_state.file;
-}
-
-FILE*
-fdopen (int fd, const char *mode)
-{
-  if (!cache_initialized)
-    return realfdopen (fd, mode);
-
-  ignore_file = realfdopen (fd, mode);
-  return ignore_file;
-}
-
 int
-fclose (FILE *fp)
+rename (const char *old, const char *new)
 {
-  if (!cache_initialized)
-    return realfclose (fp);
-
-  if (fp == ignore_file)
+  int result = realrename (old, new);
+  if (!result && is_list_file (new))
     {
-      printf ("tdpkg: ignored %p\n", ignore_file);
-      ignore_file = NULL;
-      return realfclose (fp);
+      if (tdpkg_cache_write_filename (new))
+        {
+          fprintf (stderr, "tdpkg: can't update cache for file %s, no wrapping\n", new);
+          tdpkg_cache_finalize ();
+        }
     }
-
-  if (fopen_state.file != fp)
-    {
-      fprintf (stderr, "tdpkg: fclose() to unknown file %p detected, no wrapping\n", fp);
-      return realfclose (fp);
-    }
-
-  printf ("tdpkg: fclose()\n");
-  int result = realfclose (fopen_state.file);
-  fopen_state.file = NULL;
-
   return result;
 }
 
 int
-open (const char *path, int oflag, int mode)
+open (const char *path, int oflag, ...)
 {
+  va_list ap;
+  va_start (ap, oflag);
+  int mode = va_arg (ap, int);
+  va_end (ap);
+  
   if (!cache_initialized)
     return realopen (path, oflag, mode);
 
-  if (!is_list_file (path))
+  if (!is_list_file (path) || (oflag & O_RDONLY) != O_RDONLY)
     return realopen (path, oflag, mode);
 
   if (open_state.fd >= 0)
     {
-      fprintf (stderr, "tdpkg: multiple open(%s, %d, %d) without close() detected, no wrapping\n", path, oflag, mode);
+      fprintf (stderr, "tdpkg: nested open(%s, %d, %d) detected, no wrapping\n", path, oflag, mode);
       return realopen (path, oflag, mode);
     }
 
@@ -170,6 +124,7 @@ open (const char *path, int oflag, int mode)
       if (tdpkg_cache_rebuild ())
         {
           fprintf (stderr, "tdpkg: can't rebuild cache, no wrapping\n");
+          tdpkg_cache_finalize ();
           return realopen (path, oflag, mode);
         }
       cache_initialized = 1;
@@ -182,10 +137,8 @@ open (const char *path, int oflag, int mode)
         }
     }
 
-  printf ("tdpkg: open(%s, %d, %d)\n", path, oflag, mode);
   open_state.fd = FAKE_FD;
   open_state.len = strlen (open_state.contents);
-
   return open_state.fd;
 }
 
@@ -200,11 +153,10 @@ __fxstat (int ver, int fd, struct stat* buf)
 
   if (open_state.fd != fd)
     {
-      fprintf (stderr, "tdpkg: __fxstat() to unknown fd %d\n", fd);
+      fprintf (stderr, "tdpkg: nested __fxstat(%d) detected, no wrapping\n", fd);
       return real__fxstat (ver, fd, buf);
     }
 
-  printf ("tdpkg: __fxstat(%d) is %ld\n", fd, open_state.len);
   buf->st_size = open_state.len;
   return 0;
 }
@@ -220,11 +172,10 @@ __fxstat64 (int ver, int fd, struct stat64* buf)
 
   if (open_state.fd != fd)
     {
-      fprintf (stderr, "tdpkg: __fxstat64() to unknown fd %d\n", fd);
+      fprintf (stderr, "tdpkg: nested __fxstat64(%d) detected, no wrapping\n", fd);
       return real__fxstat64 (ver, fd, buf);
     }
 
-  printf ("tdpkg: __fxstat64(%d) is %ld\n", fd, open_state.len);
   buf->st_size = open_state.len;
   return 0;
 }
@@ -240,20 +191,19 @@ read (int fildes, void *buf, size_t nbyte)
 
   if (open_state.fd != fildes)
     {
-      fprintf (stderr, "tdpkg: read() to unknown fd %d detected, no wrapping\n", fildes);
+      fprintf (stderr, "tdpkg: nested read(%d) detected, no wrapping\n", fildes);
       return realread (fildes, buf, nbyte);
     }
 
   if (open_state.read > open_state.len)
     {
-      fprintf (stderr, "tdpkg: read() already done on %d, returning 0\n", open_state.fd);
+      fprintf (stderr, "tdpkg: useless read(%d) detected, returning 0\n", open_state.fd);
       return 0;
     }
 
   size_t nowread = (open_state.len-open_state.read) > nbyte ? nbyte : (open_state.len-open_state.read);
   memcpy (buf, open_state.contents+open_state.read, nowread);
   open_state.read += nowread;
-  printf ("tdpkg: read(%d, %p, %ld) -> %ld\n", fildes, buf, nbyte, nowread);
   return nowread;
 }
 
