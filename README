@@ -1,0 +1,25 @@
+The `tdpkg' shared library is used to speed up dpkg .list file handling using sqlite3.
+Homepage: http://lethalman.hostei.com/tdpkg.html
+
+REQUIREMENTS
+
+build-essential
+libsqlite3-dev
+
+BUILD
+
+Type `make'.
+You'd better not install this library, it could make your system highly unstable.
+
+USAGE
+
+Please make a backup copy of your /var/lib/dpkg/info directory before using tdpkg.
+
+LD_PRELOAD="./libtdpkg.so" dpkg ...
+
+BENCHMARKING
+
+The operations involved with dpkg database reading are mostly done on the file system.
+For this reason cleaning up the kernel cache is a must before calling either tdpkg or dpkg:
+
+echo 1 > /proc/sys/vm/drop_caches
