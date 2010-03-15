@@ -40,6 +40,7 @@ static int (*real__fxstat64)(int ver, int fd, struct stat64* buf);
 static ssize_t (*realread)(int fildes, void *buf, size_t nbyte);
 static int (*realclose)(int fd);
 static int (*realrename)(const char *old, const char *new);
+static int (*realunlink)(const char* pathname);
 
 /* handle open() of dpkg/src/filesdb.c */
 #define FAKE_FD 4321
@@ -84,6 +85,7 @@ void _init (void)
   realread = dlsym (RTLD_NEXT, "read");
   realclose = dlsym (RTLD_NEXT, "close");
   realrename = dlsym (RTLD_NEXT, "rename");
+  realunlink = dlsym (RTLD_NEXT, "unlink");
 
   if (!tdpkg_cache_initialize ())
     cache_initialized = 1;
@@ -106,6 +108,22 @@ rename (const char *old, const char *new)
       if (tdpkg_cache_write_filename (new))
         {
           fprintf (stderr, "tdpkg: can't update cache for file %s, no wrapping\n", new);
+          tdpkg_cache_finalize ();
+          cache_initialized = 0;
+        }
+    }
+  return result;
+}
+
+int
+unlink (const char* pathname)
+{
+  int result = realunlink (pathname);
+  if (!result && is_list_file (pathname))
+    {
+      if (tdpkg_cache_delete_filename (pathname))
+        {
+          fprintf (stderr, "tdpkg: can't delete %s from cache, no wrapping\n", pathname);
           tdpkg_cache_finalize ();
           cache_initialized = 0;
         }

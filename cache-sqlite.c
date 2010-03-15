@@ -35,10 +35,12 @@
 #define CREATE_TABLE_SQL "CREATE TABLE IF NOT EXISTS files (filename varchar(255) PRIMARY KEY ON CONFLICT REPLACE, contents text);"
 #define READ_FILE_SQL "SELECT contents FROM files WHERE filename=?"
 #define INSERT_FILE_SQL "INSERT INTO files (filename, contents) VALUES (?, ?)"
+#define DELETE_FILE_SQL "DELETE FROM files WHERE filename=?"
 
 static sqlite3* db = NULL;
 static sqlite3_stmt* read_file_stmt = NULL;
 static sqlite3_stmt* insert_file_stmt = NULL;
+static sqlite3_stmt* delete_file_stmt = NULL;
 
 static int
 _sqlite_exec (const char* sql)
@@ -102,6 +104,12 @@ _sqlite_init (void)
     }
 
   if (sqlite3_prepare (db, INSERT_FILE_SQL, -1, &insert_file_stmt, NULL) != SQLITE_OK)
+    {
+      tdpkg_cache_finalize ();
+      sqlite_error (-1);
+    }
+
+  if (sqlite3_prepare (db, DELETE_FILE_SQL, -1, &delete_file_stmt, NULL) != SQLITE_OK)
     {
       tdpkg_cache_finalize ();
       sqlite_error (-1);
@@ -249,6 +257,25 @@ tdpkg_cache_write_filename (const char* filename)
   free (contents);
   return 0;
 }
+
+int
+tdpkg_cache_delete_filename (const char* filename)
+{
+  if (_sqlite_init ())
+    return -1;
+
+  if (sqlite3_reset (delete_file_stmt) != SQLITE_OK)
+    sqlite_error (-1);
+
+  if (sqlite3_bind_text (delete_file_stmt, 1, filename, -1, SQLITE_STATIC) != SQLITE_OK)
+    sqlite_error (-1);
+
+  if (sqlite3_step (delete_file_stmt) != SQLITE_DONE)
+    sqlite_error (-1);
+
+  return 0;
+}
+  
 
 int
 tdpkg_cache_rebuild (void)
