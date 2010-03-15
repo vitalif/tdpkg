@@ -200,6 +200,15 @@ tdpkg_cache_write_filename (const char* filename)
   return 0;
 }
 
+int
+tdpkg_cache_delete_filename (const char* filename)
+{
+  if (!tchdbout2 (db, filename))
+    tc_error (-1);
+  if (!tchdbsync (db))
+    tc_error (-1);
+  return 0;
+}
 
 int
 tdpkg_cache_rebuild (void)
