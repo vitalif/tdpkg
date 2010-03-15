@@ -18,13 +18,18 @@
 */
 
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
 #include <glob.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #include "cache.h"
+#include "util.h"
+
+#define CACHE_FILE "/var/lib/dpkg/info/tdpkg.cache"
 
 #define sqlite_error(ret) { fprintf (stderr, "tdpkg sqlite: %s\n", sqlite3_errmsg (db)); return ret; }
 #define CREATE_TABLE_SQL "CREATE TABLE IF NOT EXISTS files (filename varchar(255) PRIMARY KEY ON CONFLICT REPLACE, contents text);"
@@ -51,21 +56,43 @@ _sqlite_exec (const char* sql)
 
 /* returns 0 on success */
 int
-tdpkg_cache_initialize (const char* filename)
+tdpkg_cache_initialize (void)
 {
   if (sqlite3_initialize () != SQLITE_OK)
     sqlite_error (-1);
 
-  if (sqlite3_open (filename, &db) != SQLITE_OK)
+  return 0;
+}
+
+static int
+_sqlite_init (void)
+{
+  if (db)
+    return 0;
+
+  if (sqlite3_open (CACHE_FILE, &db) != SQLITE_OK)
     {
-      tdpkg_cache_finalize ();
-      sqlite_error (-1);
+      if (unlink (CACHE_FILE))
+        {
+          tdpkg_cache_finalize ();
+          return -1;
+        }
+      if (sqlite3_open (CACHE_FILE, &db) != SQLITE_OK)
+        {
+          tdpkg_cache_finalize ();
+          sqlite_error (-1);
+        }
     }
 
   if (_sqlite_exec (CREATE_TABLE_SQL))
     {
       tdpkg_cache_finalize ();
-      return -1;
+      if (unlink (CACHE_FILE))
+        return -1;
+      if (sqlite3_open (CACHE_FILE, &db) != SQLITE_OK)
+        sqlite_error (-1);
+      if (_sqlite_exec (CREATE_TABLE_SQL))
+        return -1;
     }
 
   if (sqlite3_prepare (db, READ_FILE_SQL, -1, &read_file_stmt, NULL) != SQLITE_OK)
@@ -82,11 +109,14 @@ tdpkg_cache_initialize (const char* filename)
 
   /* ensure cache consistency with the file system */
   struct stat stat_buf;
-  if (__xstat (0, filename, &stat_buf))
+  if (tdpkg_stat (CACHE_FILE, &stat_buf))
     {
-      fprintf (stderr, "tdpkg sqlite: can't stat %s\n", filename);
-      tdpkg_cache_finalize ();
-      return -1;
+      if (tdpkg_cache_rebuild ())
+        {
+          tdpkg_cache_finalize ();
+          return -1;
+        }
+      return 0;
     }
   time_t db_time = stat_buf.st_mtime;
 
@@ -105,9 +135,9 @@ tdpkg_cache_initialize (const char* filename)
       struct stat stat_buf;
 
       /* we don't use fstat because it's been wrapped */
-      if (__xstat (0, filename, &stat_buf))
+      if (tdpkg_stat (filename, &stat_buf))
         {
-          fprintf (stderr, "tdpkg sqlite: can't stat %s\n", filename);
+          fprintf (stderr, "tdpkg sqlite: can't stat %s: %s\n", filename, strerror (errno));
           tdpkg_cache_finalize ();
           return -1;
         }
@@ -144,6 +174,9 @@ tdpkg_cache_finalize (void)
 char*
 tdpkg_cache_read_filename (const char* filename)
 {
+  if (_sqlite_init ())
+    return NULL;
+
   if (sqlite3_reset (read_file_stmt) != SQLITE_OK)
     sqlite_error (NULL);
 
@@ -167,11 +200,13 @@ tdpkg_cache_read_filename (const char* filename)
 int
 tdpkg_cache_write_filename (const char* filename)
 {
-  struct stat stat_buf;
+  if (_sqlite_init ())
+    return -1;
 
-  if (__xstat (0, filename, &stat_buf))
+  struct stat stat_buf;
+  if (tdpkg_stat (filename, &stat_buf))
     {
-      fprintf (stderr, "tdpkg sqlite: can't stat %s\n", filename);
+      fprintf (stderr, "tdpkg sqlite: can't stat %s: %s\n", filename, strerror (errno));
       return -1;
     }
   size_t size = stat_buf.st_size;
@@ -179,7 +214,7 @@ tdpkg_cache_write_filename (const char* filename)
   FILE* file = fopen (filename, "r");
   if (!file)
     {
-      fprintf (stderr, "tdpkg sqlite: can't open %s\n", filename);
+      fprintf (stderr, "tdpkg sqlite: can't open %s: %s\n", filename, strerror (errno));
       return -1;
     }
 
@@ -187,7 +222,7 @@ tdpkg_cache_write_filename (const char* filename)
   if (fread (contents, sizeof (char), size, file) < size)
     {
       // FIXME: let's handle this?
-      fprintf (stderr, "tdpkg sqlite: can't read full file %s of size %ld\n", filename, size);
+      fprintf (stderr, "tdpkg sqlite: can't read full file %s of size %u\n", filename, size);
       fclose (file);
       return -1;
     }
@@ -218,6 +253,9 @@ tdpkg_cache_write_filename (const char* filename)
 int
 tdpkg_cache_rebuild (void)
 {
+  if (_sqlite_init ())
+    return -1;
+
   glob_t glob_list;
   if (glob ("/var/lib/dpkg/info/*.list", 0, NULL, &glob_list))
     {

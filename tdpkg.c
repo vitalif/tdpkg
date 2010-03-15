@@ -29,8 +29,12 @@
 
 #include "cache.h"
 
+typedef int (*open_t)(const char *path, int oflag, ...);
+static int _tdpkg_open (const char *path, int oflag, int mode);
+
 /* real functions */
-static int (*realopen)(const char *path, int oflag, ...);
+static open_t realopen;
+static open_t realopen64;
 static int (*real__fxstat)(int ver, int fd, struct stat* buf);
 static int (*real__fxstat64)(int ver, int fd, struct stat64* buf);
 static ssize_t (*realread)(int fildes, void *buf, size_t nbyte);
@@ -74,6 +78,7 @@ void _init (void)
   open_state.fd = -1;
 
   realopen = dlsym (RTLD_NEXT, "open");
+  realopen64 = dlsym (RTLD_NEXT, "open64");
   real__fxstat = dlsym (RTLD_NEXT, "__fxstat");
   real__fxstat64 = dlsym (RTLD_NEXT, "__fxstat64");
   realread = dlsym (RTLD_NEXT, "read");
@@ -102,19 +107,15 @@ rename (const char *old, const char *new)
         {
           fprintf (stderr, "tdpkg: can't update cache for file %s, no wrapping\n", new);
           tdpkg_cache_finalize ();
+          cache_initialized = 0;
         }
     }
   return result;
 }
 
-int
-open (const char *path, int oflag, ...)
+static int
+_tdpkg_open (const char *path, int oflag, int mode)
 {
-  va_list ap;
-  va_start (ap, oflag);
-  int mode = va_arg (ap, int);
-  va_end (ap);
-  
   if (!cache_initialized)
     return realopen (path, oflag, mode);
 
@@ -131,14 +132,13 @@ open (const char *path, int oflag, ...)
   if (!open_state.contents)
     {
       fprintf (stderr, "tdpkg: file %s not up-to-date in cache, rebuild cache\n", path);
-      cache_initialized = 0;
       if (tdpkg_cache_rebuild ())
         {
           fprintf (stderr, "tdpkg: can't rebuild cache, no wrapping\n");
           tdpkg_cache_finalize ();
+          cache_initialized = 0;
           return realopen (path, oflag, mode);
         }
-      cache_initialized = 1;
 
       open_state.contents = tdpkg_cache_read_filename (path);
       if (!open_state.contents)
@@ -151,6 +151,26 @@ open (const char *path, int oflag, ...)
   open_state.fd = FAKE_FD;
   open_state.len = strlen (open_state.contents);
   return open_state.fd;
+}
+
+int
+open (const char *path, int oflag, ...)
+{
+  va_list ap;
+  va_start (ap, oflag);
+  int mode = va_arg (ap, int);
+  va_end (ap);
+  return _tdpkg_open (path, oflag, mode);
+}
+
+int
+open64 (const char *path, int oflag, ...)
+{
+  va_list ap;
+  va_start (ap, oflag);
+  int mode = va_arg (ap, int);
+  va_end (ap);
+  return _tdpkg_open (path, oflag, mode);
 }
 
 int

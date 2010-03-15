@@ -20,12 +20,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <glob.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #include <tchdb.h>
 
 #include "cache.h"
+#include "util.h"
 
 #define CACHE_FILE "/var/lib/dpkg/info/tdpkg.cache"
 
@@ -33,7 +36,7 @@ static TCHDB* db = NULL;
 static int in_transaction = 0;
 static int is_write = 0;
 
-#define tc_error(ret) { fprintf (stderr, "tdpkg tokio: %s\n", tchdberrmsg (tchdbecode (db))); return ret; }
+#define tc_error(ret) { abort();fprintf (stderr, "tdpkg tokio: %s\n", tchdberrmsg (tchdbecode (db))); return ret; }
 
 static int
 _tokyo_init (int write)
@@ -48,11 +51,77 @@ _tokyo_init (int write)
   int flags = HDBOREADER | HDBOLCKNB;
   if (write)
     flags |= HDBOWRITER | HDBOCREAT;
+
   if (!tchdbopen (db, CACHE_FILE, flags))
     {
-      if (tchdbecode (db) != TCENOFILE)
+      int ecode = tchdbecode (db);
+      if (ecode == TCEMETA || ecode == TCEREAD)
+        {
+          tchdbdel (db);
+          db = NULL;
+          if (unlink (CACHE_FILE))
+            return -1;
+          db = tchdbnew ();
+          if (!tchdbopen (db, CACHE_FILE, flags))
+            {
+              if (tchdbecode (db) != TCENOFILE)
+                tc_error (-1);
+            }
+        }
+      else if (ecode != TCENOFILE)
         tc_error (-1);
     }
+  if (write && !tchdbsync (db))
+    tc_error (-1);
+
+  /* ensure cache consistency with the file system */
+  struct stat stat_buf;
+  if (tdpkg_stat (CACHE_FILE, &stat_buf))
+    {
+      if (tdpkg_cache_rebuild ())
+        {
+          tdpkg_cache_finalize ();
+          return -1;
+        }
+      return 0;
+    }
+  time_t db_time = stat_buf.st_mtime;
+
+  glob_t glob_list;
+  if (glob ("/var/lib/dpkg/info/*.list", 0, NULL, &glob_list))
+    {
+      fprintf (stderr, "tdpkg sqlite: can't glob /var/lib/dpkg/info/*.list\n");
+      tdpkg_cache_finalize ();
+      return -1;
+    }
+
+  int i;
+  for (i=0; i < glob_list.gl_pathc; i++)
+    {
+      const char* filename = glob_list.gl_pathv[i];
+      struct stat stat_buf;
+
+      /* we don't use fstat because it's been wrapped */
+      if (tdpkg_stat (filename, &stat_buf))
+        {
+          fprintf (stderr, "tdpkg sqlite: can't stat %s: %s\n", filename, strerror (errno));
+          tdpkg_cache_finalize ();
+          return -1;
+        }
+
+      /* list file more recent than cache */
+      if (stat_buf.st_mtime > db_time)
+        {
+          if (tdpkg_cache_rebuild ())
+            {
+              globfree (&glob_list);
+              tdpkg_cache_finalize ();
+              return -1;
+            }
+          break;
+        }
+    }
+  globfree (&glob_list);
 
   is_write = write;
   return 0;
@@ -69,7 +138,10 @@ void
 tdpkg_cache_finalize (void)
 {
   if (db && !tchdbclose (db))
-    tc_error ();
+    {
+      if (tchdbecode (db) != TCENOFILE)
+        tc_error ();
+    }
   if (db)
     tchdbdel (db);
   db = NULL;
@@ -91,10 +163,9 @@ tdpkg_cache_write_filename (const char* filename)
     return -1;
 
   struct stat stat_buf;
-
-  if (__xstat (0, filename, &stat_buf))
+  if (tdpkg_stat (filename, &stat_buf))
     {
-      fprintf (stderr, "tdpkg tokyo: can't stat %s\n", filename);
+      fprintf (stderr, "tdpkg tokyo: can't stat %s: %s\n", filename, strerror (errno));
       return -1;
     }
   size_t size = stat_buf.st_size;
@@ -110,7 +181,7 @@ tdpkg_cache_write_filename (const char* filename)
   if (fread (contents, sizeof (char), size, file) < size)
     {
       // FIXME: let's handle this?
-      fprintf (stderr, "tdpkg tokyo: can't read full file %s of size %ld\n", filename, size);
+      fprintf (stderr, "tdpkg tokyo: can't read full file %s of size %u\n", filename, size);
       fclose (file);
       return -1;
     }
@@ -162,6 +233,7 @@ tdpkg_cache_rebuild (void)
     }
   globfree (&glob_list);
   in_transaction = 0;
+
   if (!tchdbsync (db))
     tc_error (-1);
 

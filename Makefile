@@ -7,7 +7,7 @@ TOKYOLIBS = -ltokyocabinet
 LDFLAGS = -nostdlib -shared
 COMPILE = $(CC) $(CFLAGS)
 LINK = $(CC) $(LDFLAGS) $(LIBS)
-SRCS = tdpkg.c cache-$(CACHE).c
+SRCS = tdpkg.c util.c cache-$(CACHE).c
 OBJS = $(subst .c,.o,$(SRCS))
 
 all: libtdpkg.so
