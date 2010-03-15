@@ -36,7 +36,7 @@ static TCHDB* db = NULL;
 static int in_transaction = 0;
 static int is_write = 0;
 
-#define tc_error(ret) { abort();fprintf (stderr, "tdpkg tokio: %s\n", tchdberrmsg (tchdbecode (db))); return ret; }
+#define tc_error(ret) { fprintf (stderr, "tdpkg tokio: %s\n", tchdberrmsg (tchdbecode (db))); return ret; }
 
 static int
 _tokyo_init (int write)

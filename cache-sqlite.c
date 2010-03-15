@@ -177,6 +177,7 @@ tdpkg_cache_finalize (void)
   if (db)
     sqlite3_close (db);
   sqlite3_shutdown ();
+  db = NULL;
 }
 
 char*
