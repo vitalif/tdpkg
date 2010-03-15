@@ -1,21 +1,34 @@
-The `tdpkg' shared library is used to speed up dpkg .list file handling using sqlite3.
+The `tdpkg' shared library is used to speed up dpkg .list files loading using
+either tokyocabinet or sqlite3.
 Homepage: http://lethalman.hostei.com/tdpkg.html
 
 REQUIREMENTS
 
 build-essential
-libsqlite3-dev
+libsqlite3-dev for sqlite backend
+libtokyocabinet-dev for tokyocabinet backend
 
 BUILD
 
-Type `make'.
-You'd better not install this library, it could make your system highly unstable.
+Type `make' to build tdpkg with tokyocabinet support.
+Type `make CACHE=sqlite' instead to build tdpkg with sqlite3 support.
+You'd better not install this library, it could make your system highly
+unstable.
 
 USAGE
 
-Please make a backup copy of your /var/lib/dpkg/info directory before using tdpkg.
+Please make a backup copy of your /var/lib/dpkg/info directory before using
+tdpkg.
 
-LD_PRELOAD="./libtdpkg.so" dpkg ...
+Manual usage:
+LD_PRELOAD=./libtdpkg.so dpkg ...
+
+For system-wide usage use an alias (make sure you the absolute path to
+libtdpkg.so):
+alias dpkg="LD_PRELOAD=/path/to/libtdpkg.so dpkg"
+
+The cache for both sqlite3 and tokyocabinet is located at
+/var/lib/dpkg/info/tdpkg.cache.
 
 BENCHMARKING
 
