@@ -50,6 +50,7 @@ static struct OpenState
   char* contents;
   size_t len;
   size_t read;
+  char *fn;
 } open_state;
 
 static int cache_initialized;
@@ -140,16 +141,22 @@ _tdpkg_open (const char *path, int oflag, int mode)
   if (!is_list_file (path) || (oflag & O_RDONLY) != O_RDONLY)
     return realopen (path, oflag, mode);
 
-  if (open_state.fd >= 0)
+  // sometimes dpkg calls FIGETBSZ first time, open_state.fn fixes it
+  if (open_state.fd >= 0 && open_state.fn != path)
     {
+#ifdef TDPKG_INFO
       fprintf (stderr, "tdpkg: nested open(%s, %d, %d) detected, no wrapping\n", path, oflag, mode);
+#endif
       return realopen (path, oflag, mode);
     }
 
+  open_state.fn = (char*)path;
   open_state.contents = tdpkg_cache_read_filename (path);
   if (!open_state.contents)
     {
+#ifdef TDPKG_INFO
       fprintf (stderr, "tdpkg: file %s not up-to-date in cache, rebuild cache\n", path);
+#endif
       if (tdpkg_cache_rebuild ())
         {
           fprintf (stderr, "tdpkg: can't rebuild cache, no wrapping\n");
@@ -202,11 +209,14 @@ __fxstat (int ver, int fd, struct stat* buf)
 
   if (open_state.fd != fd)
     {
+#ifdef TDPKG_INFO
       fprintf (stderr, "tdpkg: nested __fxstat(%d) detected, no wrapping\n", fd);
+#endif
       return real__fxstat (ver, fd, buf);
     }
 
   buf->st_size = open_state.len;
+  buf->st_mode = S_IFREG;
   return 0;
 }
 
@@ -221,11 +231,14 @@ __fxstat64 (int ver, int fd, struct stat64* buf)
 
   if (open_state.fd != fd)
     {
+#ifdef TDPKG_INFO
       fprintf (stderr, "tdpkg: nested __fxstat64(%d) detected, no wrapping\n", fd);
+#endif
       return real__fxstat64 (ver, fd, buf);
     }
 
   buf->st_size = open_state.len;
+  buf->st_mode = S_IFREG;
   return 0;
 }
 
@@ -240,13 +253,17 @@ read (int fildes, void *buf, size_t nbyte)
 
   if (open_state.fd != fildes)
     {
+#ifdef TDPKG_INFO
       fprintf (stderr, "tdpkg: nested read(%d) detected, no wrapping\n", fildes);
+#endif
       return realread (fildes, buf, nbyte);
     }
 
   if (open_state.read > open_state.len)
     {
+#ifdef TDPKG_INFO
       fprintf (stderr, "tdpkg: useless read(%d) detected, returning 0\n", open_state.fd);
+#endif
       return 0;
     }
 
@@ -267,7 +284,9 @@ close (int fd)
 
   if (open_state.fd != fd)
     {
+#ifdef TDPKG_INFO
       fprintf (stderr, "tdpkg: close() on unknown fd %d, no wrapping\n", fd);
+#endif
       return realclose (fd);
     }
 
